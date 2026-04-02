@@ -1,0 +1,33 @@
+# Generated data files (rebuilt by data_scraper.py)
+event_history.json
+city_base_rates.json
+data_meta.json
+
+# SQLite database
+subscriptions.db
+
+# Environment variables (SECURITY - NEVER COMMIT)
+.env
+
+# Python Virtual Environments
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs and Editors
+.idea/
+.vscode/
+
+# Databases and Datasets
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+
+# Telethon / Telegram Session Files
+*.session
+*.session-journal
