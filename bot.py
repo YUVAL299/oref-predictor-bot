@@ -360,7 +360,7 @@ class OrefPredictorBot:
     # ── Live alert processing ──────────────────────────────────────
     async def process_live_alert(self, alert_data: dict) -> None:
         alert_type = alert_data.get("type", "")
-        if alert_type not in ("system", "early_warning"):
+        if alert_type not in ("system", "early_warning", "newsFlash"):
             return
 
         # The WebSocket payload has "cities" as a list of city name strings
