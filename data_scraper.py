@@ -125,19 +125,27 @@ def build_history(alerts: list[dict]) -> tuple[list, dict, dict]:
     logger.info(f"  Raw API type values: {raw_types}")
 
     rows = []
-    # Names that indicate a nationwide broadcast, not a targeted early warning
-    NATIONWIDE_NAMES = {"ברחבי הארץ", "כל הארץ"}
 
     for a in alerts:
-        city_names = [c["name"] for c in a.get("cities", []) if c.get("name")]
-
-        # Filter: if a newsFlash only has nationwide placeholder cities, skip it
         atype = classify_type(a.get("type", ""))
+        raw_cities = a.get("cities", [])
+
+        # For newsFlash: filter out nationwide broadcasts.
+        # The API attaches {"name": "ברחבי הארץ", "zone": null} to general advisories.
+        # Real targeted early warnings have cities with actual zone values.
         if atype == "early_warning":
-            real_cities = [c for c in city_names if c not in NATIONWIDE_NAMES]
+            real_cities = [
+                c["name"] for c in raw_cities
+                if c.get("name")
+                and c.get("zone") is not None         # has a real zone
+                and c["name"] != "ברחבי הארץ"
+                and c["name"] != "כל הארץ"
+            ]
             if not real_cities:
-                continue  # skip "שהו בקרבת מרחב מוגן" type broadcasts
+                continue  # purely a nationwide "stay near shelter" broadcast
             city_names = real_cities
+        else:
+            city_names = [c["name"] for c in raw_cities if c.get("name")]
 
         rows.append({
             "timestamp": a.get("timestamp", ""),
@@ -151,72 +159,102 @@ def build_history(alerts: list[dict]) -> tuple[list, dict, dict]:
 
     ew_df = df[df["alert_type"] == "early_warning"]
     miss_df = df[df["alert_type"] == "missiles"]
-    logger.info(f"  Classified: {len(ew_df)} early_warning, {len(miss_df)} missiles, {len(df)} total")
+    end_df = df[df["alert_type"] == "all_clear"]
+    logger.info(f"  Classified: {len(ew_df)} early_warning, {len(miss_df)} missiles, {len(end_df)} endAlert, {len(df)} total")
 
-    # Group early warnings into incidents (>30 min gap = new incident)
-    events_raw: list[dict] = []
-    cur_start = None
-    cur_warns: list = []
-    for _, row in ew_df.iterrows():
+    # ── Per-city event tracking ──────────────────────────────────────
+    #
+    # Each city has its OWN event lifecycle:
+    #   newsFlash [city]  → city's event OPENS
+    #   missiles  [city]  → city records a HIT (only if event is open)
+    #   endAlert  [city]  → city's event CLOSES → save result
+    #
+    # Example:
+    #   newsFlash [רמת גן, ת"א]   → both open
+    #   missiles  [רמת גן]        → רמת גן hit
+    #   endAlert  [ת"א]           → ת"א closes (warned, not hit)
+    #   newsFlash [רמת גן]        → רמת גן still open, polygon grows
+    #   missiles  [רמת גן]        → רמת גן hit again
+    #   endAlert  [רמת גן]        → רמת גן closes (warned + hit)
+    #
+    # Safety: force-close if open >90 min without endAlert.
+
+    MAX_OPEN_SECONDS = 5400  # 90 min
+
+    city_stats: dict[str, dict] = {}  # city → {warned, hit}
+
+    # Per-city open state: {city: {"start": ts, "hit": bool, "polygon": set, "ev_key": str}}
+    open_events: dict[str, dict] = {}
+
+    # Event polygons for the Jaccard predictor (grouped by time)
+    event_polygons: dict[str, dict] = {}  # ev_key → {start, warned_cities, hit_cities}
+
+    relevant = df[df["alert_type"].isin(["early_warning", "missiles", "all_clear"])].copy()
+    relevant = relevant.sort_values("timestamp").reset_index(drop=True)
+
+    def _close_city(city: str, was_hit: bool):
+        city_stats.setdefault(city, {"warned": 0, "hit": 0})
+        city_stats[city]["warned"] += 1
+        if was_hit:
+            city_stats[city]["hit"] += 1
+
+    for _, row in relevant.iterrows():
+        atype = row["alert_type"]
+        cities = [c for c in row["cities"] if len(c) < 50]
         t = row["timestamp"]
-        if cur_start is None or (t - cur_start).total_seconds() > 1800:
-            if cur_warns:
-                events_raw.append({"start": cur_start, "warnings": cur_warns})
-            cur_start = t
-            cur_warns = [row]
-        else:
-            cur_warns.append(row)
-    if cur_warns:
-        events_raw.append({"start": cur_start, "warnings": cur_warns})
 
-    logger.info(f"  Identified {len(events_raw)} early-warning incidents")
+        # Safety: force-close cities open too long
+        expired = [c for c, ev in open_events.items()
+                   if (t - ev["start"]).total_seconds() > MAX_OPEN_SECONDS]
+        for c in expired:
+            ev = open_events.pop(c)
+            _close_city(c, ev["hit"])
 
-    # For each incident — who was warned, who was hit?
+        if atype == "early_warning":
+            # Group simultaneous newsFlashes into one polygon (5-min bucket)
+            ev_key = str(t.floor("5min"))
+            if ev_key not in event_polygons:
+                event_polygons[ev_key] = {"start": t, "warned_cities": set(), "hit_cities": set()}
+            event_polygons[ev_key]["warned_cities"].update(cities)
+
+            for city in cities:
+                if city not in open_events:
+                    open_events[city] = {"start": t, "hit": False, "ev_key": ev_key}
+
+        elif atype == "missiles":
+            for city in cities:
+                if city in open_events:
+                    open_events[city]["hit"] = True
+                    ev_key = open_events[city].get("ev_key", "")
+                    if ev_key in event_polygons:
+                        event_polygons[ev_key]["hit_cities"].add(city)
+
+        elif atype == "all_clear":
+            for city in cities:
+                if city in open_events:
+                    ev = open_events.pop(city)
+                    _close_city(city, ev["hit"])
+
+    # Close any remaining open events
+    for city, ev in open_events.items():
+        _close_city(city, ev["hit"])
+    open_events.clear()
+
+    # Build events_out from event_polygons (for Jaccard predictor)
     events_out: list[dict] = []
-    city_stats: dict[str, dict] = {}
-    skipped_nationwide = 0
-
-    for ev in events_raw:
-        warned: set[str] = set()
-        for w in ev["warnings"]:
-            warned.update(w["cities"])
-        warned = {c for c in warned if len(c) < 50}
-        if not warned:
+    for ev_key, ev in sorted(event_polygons.items()):
+        if not ev["warned_cities"]:
             continue
-
-        # Skip nationwide broadcasts (>1400 cities = entire country)
-        if len(warned) > 1400:
-            skipped_nationwide += 1
-            continue
-
-        w_start = ev["start"] + pd.Timedelta(minutes=1)
-        w_end = ev["start"] + pd.Timedelta(minutes=20)
-        window = miss_df[(miss_df["timestamp"] >= w_start) & (miss_df["timestamp"] <= w_end)]
-
-        hit: set[str] = set()
-        for _, m in window.iterrows():
-            hit.update(m["cities"])
-        hit_in_polygon = hit & warned
-
         events_out.append({
             "timestamp": ev["start"].isoformat(),
             "hour": ev["start"].hour,
-            "polygon_size": len(warned),
-            "warned_cities": sorted(warned),
-            "hit_cities": sorted(hit_in_polygon),
-            "total_hit": len(hit_in_polygon),
+            "polygon_size": len(ev["warned_cities"]),
+            "warned_cities": sorted(ev["warned_cities"]),
+            "hit_cities": sorted(ev["hit_cities"]),
+            "total_hit": len(ev["hit_cities"]),
         })
 
-        for city in warned:
-            city_stats.setdefault(city, {"warned": 0, "hit": 0})
-            city_stats[city]["warned"] += 1
-            if city in hit_in_polygon:
-                city_stats[city]["hit"] += 1
-
-    # Base rates
-    if skipped_nationwide:
-        logger.info(f"  Skipped {skipped_nationwide} nationwide broadcasts (>1400 cities)")
-    logger.info(f"  Kept {len(events_out)} targeted early-warning events")
+    logger.info(f"  Built {len(events_out)} event polygons, tracking {len(city_stats)} cities")
 
     base_rates = {}
     for city, s in sorted(city_stats.items()):
@@ -266,13 +304,29 @@ def save(events: list, base_rates: dict, meta: dict):
 # ═══════════════════════════════════════════════════════════════════
 #  5.  MAIN
 # ═══════════════════════════════════════════════════════════════════
-async def main():
-    logger.info(f"Pulling all alerts from {START_DATE} to now ...")
-    alerts = await fetch_all_alerts()
+RAW_CACHE_FILE = "raw_alerts_cache.json"
 
-    if not alerts:
-        logger.error("No data received from API. Check your internet connection.")
-        sys.exit(1)
+
+async def main():
+    use_cache = "--local" in sys.argv
+
+    if use_cache and os.path.exists(RAW_CACHE_FILE):
+        logger.info(f"Loading cached alerts from {RAW_CACHE_FILE} ...")
+        with open(RAW_CACHE_FILE, "r", encoding="utf-8") as f:
+            alerts = json.load(f)
+        logger.info(f"  Loaded {len(alerts)} cached alerts.")
+    else:
+        logger.info(f"Pulling all alerts from {START_DATE} to now ...")
+        alerts = await fetch_all_alerts()
+
+        if not alerts:
+            logger.error("No data received from API. Check your internet connection.")
+            sys.exit(1)
+
+        # Always cache the raw response
+        with open(RAW_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(alerts, f, ensure_ascii=False)
+        logger.info(f"  Cached raw alerts → {RAW_CACHE_FILE}")
 
     events, base_rates, meta = build_history(alerts)
     save(events, base_rates, meta)

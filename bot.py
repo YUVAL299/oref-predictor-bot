@@ -222,7 +222,7 @@ class OrefPredictorBot:
             if pred["probability"] is not None:
                 _, em = self.predictor._risk(pred["probability"])
                 lines.append(f"{em} {city}: *{pred['probability']}%*")
-        lines.append(f"\n🔄 עדכון אחרון: {self.predictor.last_updated()}")
+        lines.append(f"\n🔄 נכון לחישוב סטטיסטי עד התאריך: {self.predictor.last_updated()}")
         lines.append("\nהקלידו שם עיר או לחצו /select לראות את העיר שלכם")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
