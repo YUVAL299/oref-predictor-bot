@@ -58,6 +58,13 @@ def _save_subscription(user_id: int, city: str, zone: str):
     conn.close()
 
 
+def _delete_subscription(user_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
 class OrefPredictorBot:
     def __init__(self):
         self.token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -87,6 +94,9 @@ class OrefPredictorBot:
     async def _on_boot(self, application: Application) -> None:
         self.zones = await city_api.get_all_zones()
         logger.info(f"Loaded {len(self.zones)} zones from API")
+        # Load city coordinates for distance-from-center predictions
+        if not self.predictor.coords:
+            await self.predictor.load_coords_from_api()
         application.create_task(self.streamer.start())
 
     def _subscribe(self, user_id: int, city: str, zone: str):
@@ -98,7 +108,8 @@ class OrefPredictorBot:
         self.application.add_handler(CommandHandler("select", self.cmd_select))
         self.application.add_handler(CommandHandler("status", self.cmd_status))
         self.application.add_handler(CommandHandler("stats", self.cmd_stats))
-        self.application.add_handler(CommandHandler("mock", self.cmd_mock))
+        self.application.add_handler(CommandHandler("howto", self.cmd_howto))
+        self.application.add_handler(CommandHandler("unsubscribe", self.cmd_unsubscribe))
 
         self.application.add_handler(CallbackQueryHandler(self.cb_zone_page, pattern=r"^zp:"))
         self.application.add_handler(CallbackQueryHandler(self.cb_pick_zone, pattern=r"^zn:"))
@@ -163,32 +174,29 @@ class OrefPredictorBot:
 
     # ── Commands ───────────────────────────────────────────────────
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        start_date = self.predictor.start_date_text()
-        n_events = self.predictor.total_events()
-
         await update.message.reply_text(
-            "🛡️ *ברוכים הבאים למערכת ניתוח התרעות פיקוד העורף*\n"
+            "🛡️ *בוט התרעות פיקוד העורף*\n"
             "\n"
-            "המערכת מנתחת נתונים היסטוריים ומחשבת:\n"
-            "מה הסיכוי שאחרי *התרעה מוקדמת* תהיה *אזעקה* בעיר שלכם?\n"
+            "כשמתקבלת התרעה מוקדמת, הבוט מחשב את הסיכוי "
+            "שתתקבל אזעקה ביישוב שלכם — על בסיס ניתוח "
+            "אירועים קודמים והמיקום שלכם בתוך אליפסת ההתרעה.\n"
             "\n"
-            "כשמגיעה התרעה חיה, החישוב מתחשב\n"
-            "ב*פוליגון הספציפי* של ההתרעה הנוכחית.\n"
+            "*לבחירת יישוב:*\n"
+            "🔹 /select — בחירה מהרשימה\n"
+            "🔹 *הקלידו שם יישוב* — חיפוש חופשי\n"
             "\n"
-            f"📅 מבוסס על נתונים החל מהתאריך {start_date}\n"
-            f"📊 {n_events} אירועי התרעה מנותחים\n"
+            "ניתן לשנות יישוב בכל עת על ידי שליחת שם יישוב חדש.\n"
             "\n"
-            "*שתי דרכים לבחור עיר:*\n"
-            "🔹 *הקלידו שם עיר* — חיפוש חופשי\n"
-            "🔹 /select — בחירה מהרשימה (אזור → עיר)\n"
-            "\n"
-            "🔹 /status — הסיכוי לעיר שבחרתם\n"
+            "*פקודות נוספות:*\n"
+            "🔹 /status — הסיכוי ליישוב שלכם\n"
             "🔹 /stats — סטטיסטיקות ערים נבחרות\n"
-            #"🔹 /mock — בדיקת התרעה מדומה\n"
+            "🔹 /howto — איך האלגוריתם עובד\n"
+            "🔹 /unsubscribe — ביטול רישום\n"
             "\n"
-            "⚠️ *שימו לב:* הבוט מספק הערכה סטטיסטית בלבד "
-            "על בסיס נתוני העבר, ואינו מהווה תחליף להנחיות "
-            "פיקוד העורף. תמיד היכנסו למרחב המוגן בעת אזעקה.",
+            "⚠️ *שימו לב:* הבוט מספק *הערכה סטטיסטית בלבד* "
+            "ואינו מהווה תחליף להנחיות פיקוד העורף. "
+            "*היכנסו תמיד למרחב המוגן בעת אזעקה*, "
+            "ללא קשר להערכת הבוט.",
             parse_mode="Markdown",
         )
 
@@ -216,32 +224,72 @@ class OrefPredictorBot:
             "באר שבע - צפון", "רמת גן - מערב", "פתח תקווה",
             "נתניה - מערב", "קריית שמונה", "אילת",
         ]
-        lines = ["📊 *סיכויי אזעקה – ערים נבחרות (בהינתן התרעה מוקדמת): *\n"]
+        lines = ["📊 *סיכויי אזעקה – ערים נבחרות:*\n"]
         for city in sample_cities:
             pred = self.predictor.predict(city)
             if pred["probability"] is not None:
                 _, em = self.predictor._risk(pred["probability"])
                 lines.append(f"{em} {city}: *{pred['probability']}%*")
-        lines.append(f"\n🔄 נכון לחישוב סטטיסטי עד התאריך: {self.predictor.last_updated()}")
+        lines.append(f"\n🔄 עדכון אחרון: {self.predictor.last_updated()}")
         lines.append("\nהקלידו שם עיר או לחצו /select לראות את העיר שלכם")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-    async def cmd_mock(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def cmd_howto(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        start_date = self.predictor.start_date_text()
+        n_events = self.predictor.total_events()
+
+        await update.message.reply_text(
+            "🔬 *איך האלגוריתם עובד?*\n"
+            "\n"
+            "*1. מה זה התרעה מוקדמת?*\n"
+            "פיקוד העורף שולח התרעה מוקדמת לאזורים נרחבים "
+            "כדי להזהיר אנשים להתקרב למרחב מוגן. "
+            "לאחר מספר דקות, חלק מהאזורים מקבלים אזעקת צבע אדום.\n"
+            "\n"
+            "*2. התאמת אליפסה*\n"
+            "כשמתקבלת התרעה מוקדמת, הבוט מתאים אליפסה "
+            "(צורה גיאומטרית) לפוליגון של היישובים שקיבלו התרעה, "
+            "על בסיס הקואורדינטות שלהם.\n"
+            "\n"
+            "*3. מרחק מהמרכז*\n"
+            "הבוט מחשב את המרחק של היישוב שלכם ממרכז האליפסה "
+            "(מרחק מהלנוביס — המתחשב בצורת האליפסה ובכיוון שלה).\n"
+            "\n"
+            "*4. הסתברות מהנתונים*\n"
+            "על בסיס ניתוח של כל אירועי העבר, המערכת למדה "
+            "שיישובים במרכז האליפסה קיבלו אזעקה ב-~65% מהמקרים, "
+            "בעוד יישובים בשולי האליפסה קיבלו אזעקה ב-~15% בלבד.\n"
+            "\n"
+            "המודל משלב את המרחק מהמרכז עם מאפיינים נוספים "
+            "כמו היסטוריית היישוב, גודל הפוליגון, שעה ביום ועוד.\n"
+            "\n"
+            f"📅 נתונים מ-{start_date}\n"
+            f"📊 {n_events} אירועי התרעה מנותחים\n"
+            f"🔄 עדכון אחרון: {self.predictor.last_updated()}\n"
+            "\n"
+            "⚠️ *שימו לב:* הבוט מספק *הערכה סטטיסטית בלבד* "
+            "ואינו מהווה תחליף להנחיות פיקוד העורף.",
+            parse_mode="Markdown",
+        )
+
+    async def cmd_unsubscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = update.message.from_user.id
         sub = self.user_subscriptions.get(user_id)
+
         if not sub:
-            await update.message.reply_text("⚠️ לא בחרתם עיר. לחצו /select תחילה.")
+            await update.message.reply_text("ℹ️ אינכם רשומים כרגע.")
             return
-        await update.message.reply_text("🛠️ מדמה התרעה מוקדמת...")
-        zone = sub.get("zone", "")
-        # Build a mock polygon of all cities in the user's zone
-        zone_cities = await city_api.get_cities_by_zone(zone, limit=500) if zone else []
-        polygon_city_names = [c["name"] for c in zone_cities]
-        mock_payload = {
-            "type": "early_warning",
-            "cities": polygon_city_names,
-        }
-        await self.process_live_alert(mock_payload)
+
+        city = sub["city"]
+        del self.user_subscriptions[user_id]
+        _delete_subscription(user_id)
+
+        await update.message.reply_text(
+            f"✅ הרישום ל-*{city}* בוטל.\n"
+            "לא תקבלו יותר התראות.\n\n"
+            "להרשמה מחדש — שלחו שם יישוב או לחצו /select.",
+            parse_mode="Markdown",
+        )
 
     # ── Free-text city search ──────────────────────────────────────
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -341,7 +389,7 @@ class OrefPredictorBot:
         await q.edit_message_text(
             f"✅ *נרשמתם ל: {city}*\n\n{msg}\n\n"
             "תקבלו התראה כשתהיה התרעה מוקדמת באזור שלכם.\n"
-            "ניתן ללחוץ /start בכל עת.",
+            "לחצו /status בכל עת.",
             parse_mode="Markdown",
         )
 
