@@ -379,7 +379,7 @@ class Predictor:
             f"מבוסס על {pred['total_warnings']} התרעות מוקדמות\n"
             f"מתוכן {pred['total_hits']} הובילו לאזעקה בפועל\n"
             f"\n"
-            f"🔄 עדכון אחרון: {self.last_updated()}"
+            f"🔄 עדכון נתונים אחרון: {self.last_updated()}"
         )
 
     def format_live_warning(self, city: str, polygon_cities: list[str]) -> str:

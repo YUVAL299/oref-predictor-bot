@@ -109,6 +109,7 @@ class OrefPredictorBot:
         self.application.add_handler(CommandHandler("status", self.cmd_status))
         self.application.add_handler(CommandHandler("stats", self.cmd_stats))
         self.application.add_handler(CommandHandler("howto", self.cmd_howto))
+        self.application.add_handler(CommandHandler("contact", self.cmd_contact))
         self.application.add_handler(CommandHandler("unsubscribe", self.cmd_unsubscribe))
 
         self.application.add_handler(CallbackQueryHandler(self.cb_zone_page, pattern=r"^zp:"))
@@ -175,23 +176,24 @@ class OrefPredictorBot:
     # ── Commands ───────────────────────────────────────────────────
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
-            "🛡️ *בוט התרעות פיקוד העורף*\n"
+            "🛡️ *בוט ניתוח התרעות פיקוד העורף*\n"
             "\n"
             "כשמתקבלת התרעה מוקדמת, הבוט מחשב את הסיכוי "
-            "שתתקבל אזעקה ביישוב שלכם — על בסיס ניתוח "
+            "שתתקבל אזעקה ביישוב שלכם - על בסיס ניתוח "
             "אירועים קודמים והמיקום שלכם בתוך אליפסת ההתרעה.\n"
             "\n"
             "*לבחירת יישוב:*\n"
-            "🔹 /select — בחירה מהרשימה\n"
-            "🔹 *הקלידו שם יישוב* — חיפוש חופשי\n"
+            "🔹 *הקלידו שם יישוב* - חיפוש חופשי\n"
+            "🔹 /select - או ביחרו מהרשימה\n"
             "\n"
             "ניתן לשנות יישוב בכל עת על ידי שליחת שם יישוב חדש.\n"
             "\n"
             "*פקודות נוספות:*\n"
-            "🔹 /status — הסיכוי ליישוב שלכם\n"
-            "🔹 /stats — סטטיסטיקות ערים נבחרות\n"
-            "🔹 /howto — איך האלגוריתם עובד\n"
-            "🔹 /unsubscribe — ביטול רישום\n"
+            "🔹 /status - הסיכוי ליישוב שלכם\n"
+            "🔹 /stats - סטטיסטיקות ערים נבחרות\n"
+            "🔹 /howto - איך האלגוריתם עובד\n"
+            "🔹 /contact - יצירת קשר\n"
+            "🔹 /unsubscribe - ביטול רישום\n"
             "\n"
             "⚠️ *שימו לב:* הבוט מספק *הערכה סטטיסטית בלבד* "
             "ואינו מהווה תחליף להנחיות פיקוד העורף. "
@@ -230,7 +232,7 @@ class OrefPredictorBot:
             if pred["probability"] is not None:
                 _, em = self.predictor._risk(pred["probability"])
                 lines.append(f"{em} {city}: *{pred['probability']}%*")
-        lines.append(f"\n🔄 עדכון אחרון: {self.predictor.last_updated()}")
+        lines.append(f"\n🔄 עדכון נתונים אחרון: {self.predictor.last_updated()}")
         lines.append("\nהקלידו שם עיר או לחצו /select לראות את העיר שלכם")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
@@ -253,7 +255,7 @@ class OrefPredictorBot:
             "\n"
             "*3. מרחק מהמרכז*\n"
             "הבוט מחשב את המרחק של היישוב שלכם ממרכז האליפסה "
-            "(מרחק מהלנוביס — המתחשב בצורת האליפסה ובכיוון שלה).\n"
+            "(מרחק מהלנוביס - המתחשב בצורת האליפסה ובכיוון שלה).\n"
             "\n"
             "*4. הסתברות מהנתונים*\n"
             "על בסיס ניתוח של כל אירועי העבר, המערכת למדה "
@@ -265,10 +267,20 @@ class OrefPredictorBot:
             "\n"
             f"📅 נתונים מ-{start_date}\n"
             f"📊 {n_events} אירועי התרעה מנותחים\n"
-            f"🔄 עדכון אחרון: {self.predictor.last_updated()}\n"
+            f"🔄 עדכון נתונים אחרון: {self.predictor.last_updated()}\n"
             "\n"
             "⚠️ *שימו לב:* הבוט מספק *הערכה סטטיסטית בלבד* "
             "ואינו מהווה תחליף להנחיות פיקוד העורף.",
+            parse_mode="Markdown",
+        )
+
+    async def cmd_contact(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await update.message.reply_text(
+            "📬 *יצירת קשר*\n"
+            "\n"
+            "לשאלות, הערות, הארות, דיווח על באגים או הצעות לשיפור:\n"
+            "\n"
+            "📧 yuval.lichtman@gmail.com\n",
             parse_mode="Markdown",
         )
 
@@ -287,7 +299,7 @@ class OrefPredictorBot:
         await update.message.reply_text(
             f"✅ הרישום ל-*{city}* בוטל.\n"
             "לא תקבלו יותר התראות.\n\n"
-            "להרשמה מחדש — שלחו שם יישוב או לחצו /select.",
+            "להרשמה מחדש - שלחו שם יישוב או לחצו /select.",
             parse_mode="Markdown",
         )
 
@@ -389,7 +401,7 @@ class OrefPredictorBot:
         await q.edit_message_text(
             f"✅ *נרשמתם ל: {city}*\n\n{msg}\n\n"
             "תקבלו התראה כשתהיה התרעה מוקדמת באזור שלכם.\n"
-            "לחצו /status בכל עת.",
+            "/unsubscribe לביטול הרשמה לבוט.",
             parse_mode="Markdown",
         )
 
