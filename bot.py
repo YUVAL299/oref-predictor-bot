@@ -176,7 +176,7 @@ class OrefPredictorBot:
     # ── Commands ───────────────────────────────────────────────────
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
-            "🛡️ *בוט ניתוח התרעות פיקוד העורף*\n"
+            "🛡️ *בוט ניתוח התרעות מקדימות*\n"
             "\n"
             "כשמתקבלת התרעה מוקדמת, הבוט מחשב את הסיכוי "
             "שתתקבל אזעקה ביישוב שלכם - על בסיס ניתוח "
@@ -278,7 +278,7 @@ class OrefPredictorBot:
         await update.message.reply_text(
             "📬 *יצירת קשר*\n"
             "\n"
-            "לשאלות, הערות, הארות, דיווח על באגים או הצעות לשיפור:\n"
+            "לשאלות, הערות, הארות, דיווח על באגים או הצעות לשיפור 😊:\n"
             "\n"
             "📧 yuval.lichtman@gmail.com\n",
             parse_mode="Markdown",
@@ -400,7 +400,7 @@ class OrefPredictorBot:
         msg = self.predictor.format_status(city)
         await q.edit_message_text(
             f"✅ *נרשמתם ל: {city}*\n\n{msg}\n\n"
-            "תקבלו התראה כשתהיה התרעה מוקדמת באזור שלכם.\n"
+            "תתקבל התראה כשתהיה התרעה מוקדמת באזור שלכם.\n"
             "/unsubscribe לביטול הרשמה לבוט.",
             parse_mode="Markdown",
         )

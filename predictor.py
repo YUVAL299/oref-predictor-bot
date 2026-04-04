@@ -378,6 +378,7 @@ class Predictor:
             f"רמת סיכון: {risk_level}\n"
             f"מבוסס על {pred['total_warnings']} התרעות מוקדמות\n"
             f"מתוכן {pred['total_hits']} הובילו לאזעקה בפועל\n"
+            f"(הנתונים מחושבים החל מהתאריך 15/03/2026)\n"
             f"\n"
             f"🔄 עדכון נתונים אחרון: {self.last_updated()}"
         )
