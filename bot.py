@@ -278,7 +278,7 @@ class OrefPredictorBot:
         await update.message.reply_text(
             "📬 *יצירת קשר*\n"
             "\n"
-            "לשאלות, הערות, הארות, דיווח על באגים או הצעות לשיפור 😊:\n"
+            "😊 לשאלות, הערות, הארות, דיווח על באגים או הצעות לשיפור:\n"
             "\n"
             "📧 yuval.lichtman@gmail.com\n",
             parse_mode="Markdown",
