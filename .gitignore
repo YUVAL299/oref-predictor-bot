@@ -31,3 +31,7 @@ __pycache__/
 # Telethon / Telegram Session Files
 *.session
 *.session-journal
+
+alert_model.pkl
+raw_alerts_cache.json
+debug_רמת_גן__מערב.txt

@@ -3,3 +3,5 @@ python-socketio[asyncio_client]
 aiohttp
 python-dotenv
 pandas
+scikit-learn
+joblib

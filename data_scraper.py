@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://redalert.orielhaim.com/api/stats/history"
 PAGE_SIZE = 100
-START_DATE = "2026-02-28"
+START_DATE = "2026-03-15"
 ISRAEL_TZ = timezone(timedelta(hours=3))
 API_KEY = os.environ.get("REDALERT_API_KEY", "")
 
@@ -124,6 +124,17 @@ def build_history(alerts: list[dict]) -> tuple[list, dict, dict]:
         raw_types[t] = raw_types.get(t, 0) + 1
     logger.info(f"  Raw API type values: {raw_types}")
 
+    # Build ID↔name mapping from the raw alerts
+    id_to_name: dict[int, str] = {}
+    for a in alerts:
+        for c in a.get("cities", []):
+            cid = c.get("id")
+            cname = c.get("name", "")
+            if cid is not None and cname:
+                id_to_name[cid] = cname
+
+    logger.info(f"  Built ID→name mapping for {len(id_to_name)} cities")
+
     rows = []
 
     for a in alerts:
@@ -134,132 +145,171 @@ def build_history(alerts: list[dict]) -> tuple[list, dict, dict]:
         # The API attaches {"name": "ברחבי הארץ", "zone": null} to general advisories.
         # Real targeted early warnings have cities with actual zone values.
         if atype == "early_warning":
-            real_cities = [
-                c["name"] for c in raw_cities
-                if c.get("name")
-                and c.get("zone") is not None         # has a real zone
-                and c["name"] != "ברחבי הארץ"
-                and c["name"] != "כל הארץ"
+            real_ids = [
+                c["id"] for c in raw_cities
+                if c.get("id") is not None
+                and c.get("zone") is not None
+                and c.get("name", "") not in ("ברחבי הארץ", "כל הארץ")
             ]
-            if not real_cities:
-                continue  # purely a nationwide "stay near shelter" broadcast
-            city_names = real_cities
+            if not real_ids:
+                continue
+            city_ids = real_ids
         else:
-            city_names = [c["name"] for c in raw_cities if c.get("name")]
+            city_ids = [c["id"] for c in raw_cities if c.get("id") is not None]
 
         rows.append({
             "timestamp": a.get("timestamp", ""),
             "alert_type": atype,
-            "cities": city_names,
+            "city_ids": city_ids,
         })
 
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
 
+    # ── Merge early warnings within 30 seconds ─────────────────────
+    # Multiple newsFlash records sent seconds apart to different areas
+    # are part of the same wave. Merge their city lists.
+    ew_mask = df["alert_type"] == "early_warning"
+    ew_rows = df[ew_mask].copy()
+
+    if len(ew_rows) > 1:
+        merged_ew = []
+        current_ts = ew_rows.iloc[0]["timestamp"]
+        current_ids = list(ew_rows.iloc[0]["city_ids"])
+
+        for i in range(1, len(ew_rows)):
+            row = ew_rows.iloc[i]
+            gap = (row["timestamp"] - current_ts).total_seconds()
+
+            if gap <= 30:
+                # Same wave — merge city IDs
+                current_ids.extend(row["city_ids"])
+            else:
+                # New wave — save current, start new
+                merged_ew.append({
+                    "timestamp": current_ts,
+                    "alert_type": "early_warning",
+                    "city_ids": list(set(current_ids)),  # deduplicate
+                })
+                current_ts = row["timestamp"]
+                current_ids = list(row["city_ids"])
+
+        # Don't forget the last group
+        merged_ew.append({
+            "timestamp": current_ts,
+            "alert_type": "early_warning",
+            "city_ids": list(set(current_ids)),
+        })
+
+        # Replace EW rows with merged ones
+        non_ew = df[~ew_mask]
+        merged_df = pd.DataFrame(merged_ew)
+        merged_df["timestamp"] = pd.to_datetime(merged_df["timestamp"], utc=True)
+        df = pd.concat([non_ew, merged_df], ignore_index=True)
+        df = df.sort_values("timestamp").reset_index(drop=True)
+
+        logger.info(f"  Merged {len(ew_rows)} EW records → {len(merged_ew)} waves (30s window)")
+
     ew_df = df[df["alert_type"] == "early_warning"]
     miss_df = df[df["alert_type"] == "missiles"]
     end_df = df[df["alert_type"] == "all_clear"]
-    logger.info(f"  Classified: {len(ew_df)} early_warning, {len(miss_df)} missiles, {len(end_df)} endAlert, {len(df)} total")
+    logger.info(f"  After merge: {len(ew_df)} early_warning, {len(miss_df)} missiles, {len(end_df)} endAlert")
 
-    # ── Per-city event tracking ──────────────────────────────────────
+    # ── Per-city event tracking (using IDs internally) ──────────────
     #
-    # Each city has its OWN event lifecycle:
-    #   newsFlash [city]  → city's event OPENS
-    #   missiles  [city]  → city records a HIT (only if event is open)
-    #   endAlert  [city]  → city's event CLOSES → save result
-    #
-    # Example:
-    #   newsFlash [רמת גן, ת"א]   → both open
-    #   missiles  [רמת גן]        → רמת גן hit
-    #   endAlert  [ת"א]           → ת"א closes (warned, not hit)
-    #   newsFlash [רמת גן]        → רמת גן still open, polygon grows
-    #   missiles  [רמת גן]        → רמת גן hit again
-    #   endAlert  [רמת גן]        → רמת גן closes (warned + hit)
+    # Each city (by ID) has its OWN event lifecycle:
+    #   newsFlash [id]  → city OPENS
+    #   missiles  [id]  → city records a HIT (only if open)
+    #   endAlert  [id]  → city CLOSES → save result
     #
     # Safety: force-close if open >90 min without endAlert.
 
     MAX_OPEN_SECONDS = 5400  # 90 min
 
-    city_stats: dict[str, dict] = {}  # city → {warned, hit}
+    city_stats: dict[int, dict] = {}  # city_id → {warned, hit}
 
-    # Per-city open state: {city: {"start": ts, "hit": bool, "polygon": set, "ev_key": str}}
-    open_events: dict[str, dict] = {}
+    # Per-city open state: {city_id: {"start": ts, "hit": bool, "ev_key": str}}
+    open_events: dict[int, dict] = {}
 
-    # Event polygons for the Jaccard predictor (grouped by time)
-    event_polygons: dict[str, dict] = {}  # ev_key → {start, warned_cities, hit_cities}
+    # Event polygons for the ML predictor (grouped by time)
+    event_polygons: dict[str, dict] = {}  # ev_key → {start, warned_ids, hit_ids}
 
     relevant = df[df["alert_type"].isin(["early_warning", "missiles", "all_clear"])].copy()
     relevant = relevant.sort_values("timestamp").reset_index(drop=True)
 
-    def _close_city(city: str, was_hit: bool):
-        city_stats.setdefault(city, {"warned": 0, "hit": 0})
-        city_stats[city]["warned"] += 1
+    def _close_city(cid: int, was_hit: bool):
+        city_stats.setdefault(cid, {"warned": 0, "hit": 0})
+        city_stats[cid]["warned"] += 1
         if was_hit:
-            city_stats[city]["hit"] += 1
+            city_stats[cid]["hit"] += 1
 
     for _, row in relevant.iterrows():
         atype = row["alert_type"]
-        cities = [c for c in row["cities"] if len(c) < 50]
+        city_ids = row["city_ids"]
         t = row["timestamp"]
 
         # Safety: force-close cities open too long
-        expired = [c for c, ev in open_events.items()
+        expired = [cid for cid, ev in open_events.items()
                    if (t - ev["start"]).total_seconds() > MAX_OPEN_SECONDS]
-        for c in expired:
-            ev = open_events.pop(c)
-            _close_city(c, ev["hit"])
+        for cid in expired:
+            ev = open_events.pop(cid)
+            _close_city(cid, ev["hit"])
 
         if atype == "early_warning":
-            # Group simultaneous newsFlashes into one polygon (5-min bucket)
             ev_key = str(t.floor("5min"))
             if ev_key not in event_polygons:
-                event_polygons[ev_key] = {"start": t, "warned_cities": set(), "hit_cities": set()}
-            event_polygons[ev_key]["warned_cities"].update(cities)
+                event_polygons[ev_key] = {"start": t, "warned_ids": set(), "hit_ids": set()}
+            event_polygons[ev_key]["warned_ids"].update(city_ids)
 
-            for city in cities:
-                if city not in open_events:
-                    open_events[city] = {"start": t, "hit": False, "ev_key": ev_key}
+            for cid in city_ids:
+                if cid not in open_events:
+                    open_events[cid] = {"start": t, "hit": False, "ev_key": ev_key}
 
         elif atype == "missiles":
-            for city in cities:
-                if city in open_events:
-                    open_events[city]["hit"] = True
-                    ev_key = open_events[city].get("ev_key", "")
+            for cid in city_ids:
+                if cid in open_events:
+                    open_events[cid]["hit"] = True
+                    ev_key = open_events[cid].get("ev_key", "")
                     if ev_key in event_polygons:
-                        event_polygons[ev_key]["hit_cities"].add(city)
+                        event_polygons[ev_key]["hit_ids"].add(cid)
 
         elif atype == "all_clear":
-            for city in cities:
-                if city in open_events:
-                    ev = open_events.pop(city)
-                    _close_city(city, ev["hit"])
+            for cid in city_ids:
+                if cid in open_events:
+                    ev = open_events.pop(cid)
+                    _close_city(cid, ev["hit"])
 
     # Close any remaining open events
-    for city, ev in open_events.items():
-        _close_city(city, ev["hit"])
+    for cid, ev in open_events.items():
+        _close_city(cid, ev["hit"])
     open_events.clear()
 
-    # Build events_out from event_polygons (for Jaccard predictor)
+    # Convert ID-based results to name-based outputs
+    # (the predictor and bot work with city names)
     events_out: list[dict] = []
     for ev_key, ev in sorted(event_polygons.items()):
-        if not ev["warned_cities"]:
+        if not ev["warned_ids"]:
             continue
+        warned_names = sorted(id_to_name.get(cid, str(cid)) for cid in ev["warned_ids"])
+        hit_names = sorted(id_to_name.get(cid, str(cid)) for cid in ev["hit_ids"])
         events_out.append({
             "timestamp": ev["start"].isoformat(),
             "hour": ev["start"].hour,
-            "polygon_size": len(ev["warned_cities"]),
-            "warned_cities": sorted(ev["warned_cities"]),
-            "hit_cities": sorted(ev["hit_cities"]),
-            "total_hit": len(ev["hit_cities"]),
+            "polygon_size": len(warned_names),
+            "warned_cities": warned_names,
+            "hit_cities": hit_names,
+            "total_hit": len(hit_names),
         })
 
     logger.info(f"  Built {len(events_out)} event polygons, tracking {len(city_stats)} cities")
 
+    # Base rates (convert ID keys to name keys)
     base_rates = {}
-    for city, s in sorted(city_stats.items()):
+    for cid, s in city_stats.items():
+        name = id_to_name.get(cid, str(cid))
         if s["warned"] > 0:
-            base_rates[city] = {
+            base_rates[name] = {
                 "warned": s["warned"],
                 "hit": s["hit"],
                 "rate": round(s["hit"] / s["warned"], 4),
