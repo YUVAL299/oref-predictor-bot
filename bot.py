@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import asyncio
 import logging
 import math
 import os
@@ -81,6 +84,10 @@ class OrefPredictorBot:
 
         # Zone cache
         self.zones: list[str] = []
+
+        # Alert buffer for merging burst newsFlash records
+        self._alert_buffer: list[str] = []
+        self._buffer_task: asyncio.Task | None = None
 
         self.application = (
             Application.builder()
@@ -417,30 +424,57 @@ class OrefPredictorBot:
     async def cb_noop(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.callback_query.answer()
 
-    # ── Live alert processing ──────────────────────────────────────
+    # ── Live alert processing with buffering ─────────────────────
+    # Multiple newsFlash records can arrive seconds apart for the same
+    # event (different areas of the same polygon). We buffer for 10
+    # seconds to collect them all before computing the prediction.
+
     async def process_live_alert(self, alert_data: dict) -> None:
         alert_type = alert_data.get("type", "")
         if alert_type not in ("system", "early_warning", "newsFlash"):
             return
 
-        # The WebSocket payload has "cities" as a list of city name strings
+        # Normalize city names from the payload
         polygon_cities = alert_data.get("cities", [])
         if isinstance(polygon_cities, str):
             polygon_cities = [c.strip() for c in polygon_cities.split(",")]
-        # Normalize: could be list of strings or list of dicts
         normalized = []
         for c in polygon_cities:
             if isinstance(c, dict):
                 normalized.append(c.get("name", ""))
             else:
                 normalized.append(str(c).strip())
-        polygon_cities = [c for c in normalized if c]
+        new_cities = [c for c in normalized if c]
 
-        if not polygon_cities:
+        if not new_cities:
             return
 
+        # Add to buffer
+        self._alert_buffer.extend(new_cities)
+        logger.info(f"📥 Buffered {len(new_cities)} cities (total in buffer: {len(set(self._alert_buffer))})")
+
+        # Cancel previous timer and start a new 10-second wait
+        if self._buffer_task and not self._buffer_task.done():
+            self._buffer_task.cancel()
+
+        self._buffer_task = asyncio.create_task(self._flush_buffer_after_delay())
+
+    async def _flush_buffer_after_delay(self):
+        """Wait 5 seconds, then process the accumulated polygon."""
+        await asyncio.sleep(5)
+        await self._flush_buffer()
+
+    async def _flush_buffer(self):
+        """Process all buffered cities as one merged polygon."""
+        if not self._alert_buffer:
+            return
+
+        # Take all buffered cities and clear the buffer
+        polygon_cities = list(set(self._alert_buffer))
+        self._alert_buffer = []
+
         polygon_set = set(polygon_cities)
-        logger.info(f"🚨 Early warning – {len(polygon_cities)} cities in polygon")
+        logger.info(f"🚨 Processing merged polygon: {len(polygon_cities)} unique cities")
 
         for user_id, sub in self.user_subscriptions.items():
             user_city = sub.get("city", "")
