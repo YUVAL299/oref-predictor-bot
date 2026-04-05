@@ -189,7 +189,7 @@ class OrefPredictorBot:
             "שתתקבל אזעקה ביישוב שלכם - על בסיס ניתוח "
             "אירועים קודמים והמיקום שלכם בתוך אליפסת ההתרעה.\n"
             "\n"
-            "*לבחירת יישוב:*\n"
+            "*להפעלת הבוט ביחרו תחילה את שם היישוב:*\n"
             "🔹 *הקלידו שם יישוב* - חיפוש חופשי\n"
             "🔹 /select - או ביחרו מהרשימה\n"
             "\n"
@@ -460,8 +460,8 @@ class OrefPredictorBot:
         self._buffer_task = asyncio.create_task(self._flush_buffer_after_delay())
 
     async def _flush_buffer_after_delay(self):
-        """Wait 5 seconds, then process the accumulated polygon."""
-        await asyncio.sleep(5)
+        """Wait 7 seconds, then process the accumulated polygon."""
+        await asyncio.sleep(7)
         await self._flush_buffer()
 
     async def _flush_buffer(self):
