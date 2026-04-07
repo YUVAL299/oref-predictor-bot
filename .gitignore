@@ -1,37 +1,35 @@
-# Generated data files (rebuilt by data_scraper.py)
+# Environment / secrets
+.env
+
+# Generated data files (rebuilt by data_scraper)
 event_history.json
 city_base_rates.json
+city_coords.json
 data_meta.json
+raw_alerts_cache.json
+
+# ML model (rebuilt on startup)
+alert_model.pkl
 
 # SQLite database
 subscriptions.db
 
-# Environment variables (SECURITY - NEVER COMMIT)
-.env
+# Debug outputs
+debug_*.txt
 
-# Python Virtual Environments
-venv/
-env/
-
-# Python Cache
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+venv/
+.venv/
 
-# IDEs and Editors
+# IDE
 .idea/
 .vscode/
+*.swp
+*.swo
 
-# Databases and Datasets
-*.db
-*.sqlite
-*.sqlite3
-*.csv
-
-# Telethon / Telegram Session Files
-*.session
-*.session-journal
-
-alert_model.pkl
-raw_alerts_cache.json
-city_coords.json
+# OS
+.DS_Store
+Thumbs.db
