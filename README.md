@@ -1,99 +1,131 @@
-# Oref Predictor Bot
+# 🛡️ Oref Predictor Bot
 
-A Telegram bot that predicts the probability of an alarm following an early warning from the IDF Home Front Command (Pikud HaOref).
+A Telegram bot that predicts the probability of an alarm in your area following an early warning from the IDF Home Front Command.
 
-## How It Works
+**[➡️ Open the bot on Telegram](https://t.me/OrefPredictorBot)**
 
-When the Home Front Command issues an early warning, it covers a polygon of cities. The bot:
+> ⚠️ **Disclaimer:** This bot provides statistical estimates only and is not a substitute for official Home Front Command instructions. **Always enter a protected space when an alarm sounds**, regardless of the bot's prediction.
 
-1. **Fits an ellipse** to the warned cities' geographic coordinates
-2. **Computes the Mahalanobis distance** of the user's city from the ellipse center — accounting for the shape and orientation of the warning zone
-3. **Uses a Random Forest model** (trained on historical data) to predict the probability of an actual alarm, combining:
-   - Distance from ellipse center (most predictive feature)
-   - City's historical hit rate
-   - Polygon size, shape, and spread
-   - Time of day
-   - And more (12 features total)
+---
 
-Key insight from the data: cities at the **center** of the early warning ellipse were hit ~65% of the time, while cities on the **edge** were hit only ~15%.
+## What Does This Bot Do?
 
-## Architecture
+When the Home Front Command issues an **early warning** (התרעה מוקדמת), it covers hundreds of cities - but only some of them will actually receive a **red alert** (אזעקה) minutes later.
 
-```
-src/
-├── config.py              # Centralized settings and constants
-├── bot.py                 # Telegram bot (OrefPredictorBot)
-├── predictor.py           # ML prediction engine (Predictor)
-├── ellipse.py             # Gaussian ellipse fitting (EllipseFitter)
-├── city_api.py            # RedAlert Cities API client (CityAPI)
-├── alert_streamer.py      # WebSocket real-time alerts (AlertStreamer)
-├── subscription_store.py  # SQLite user subscriptions (SubscriptionStore)
-└── data_scraper.py        # Historical data pipeline (DataScraper)
-```
+This bot analyzes the warning in real time and tells you:
+- **The probability** that your specific city will get an actual alarm
+- **Your position** within the warning ellipse (center, middle, or edge)
+- **A risk level** with a recommendation on what to do
 
-## Setup
+<p align="center">
+  <img src="screenshots/live_alerts.jpg" width="300" alt="Live alert notifications showing different probability levels">
+</p>
 
-```bash
-# Clone and setup
-git clone https://github.com/YOUR_USERNAME/oref-predictor-bot.git
-cd oref-predictor-bot
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+The probability varies depending on where your city falls within the warning zone - cities at the **center** of the ellipse historically received alarms ~65% of the time, while cities on the **edge** were hit only ~15%.
 
-# Configure
-cp .env.example .env
-# Edit .env with your TELEGRAM_BOT_TOKEN and REDALERT_API_KEY
+---
 
-# Fetch historical data
-python -m src.data_scraper
+## Getting Started
 
-# Run the bot
-python main.py
-```
+### 1. Open the Bot
 
-## Deployment (Oracle Cloud Free Tier)
+Open [@OrefPredictorBot](https://t.me/OrefPredictorBot) on Telegram and tap **Start**.
 
-```bash
-# On the server
-sudo nano /etc/systemd/system/oref-bot.service
-# Paste the service config, then:
-sudo systemctl daemon-reload
-sudo systemctl enable oref-bot
-sudo systemctl start oref-bot
+<p align="center">
+  <img src="screenshots/start.jpg" width="300" alt="Welcome message">
+</p>
 
-# Auto-refresh data every 6 hours
-crontab -e
-# Add: 0 */6 * * * cd /home/ubuntu/oref-predictor-bot && venv/bin/python -m src.data_scraper && rm -f alert_model.pkl
-```
+### 2. Choose Your City
 
-## Tools
+You have two ways to register:
 
-```bash
-python -m tools.check_city "רמת גן - מערב"       # Check city stats
-python -m tools.debug_city "רמת גן - מערב"       # Debug event timeline
-python -m src.data_scraper --local                 # Rebuild from cache (no API call)
-```
+- **Type your city name** - the bot will search and register you automatically
+- **Use `/select`** - browse by region, then pick your city from the list
+
+<p align="center">
+  <img src="screenshots/select.jpg" width="300" alt="Region selection menu">
+</p>
+
+You can change your city at any time by simply sending a new city name.
+
+### 3. Get Your Probability
+
+Use `/status` to see your city's historical alarm probability based on all past early warnings.
+
+<p align="center">
+  <img src="screenshots/status.jpg" width="300" alt="City status showing 73.6% probability">
+</p>
+
+### 4. Receive Live Alerts
+
+When a real early warning is issued, the bot will automatically send you a notification with the predicted probability for your city - no action needed on your part.
+
+---
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `/start` | Welcome message and instructions |
+| `/select` | Choose your city from a region list |
+| `/status` | Show your city's alarm probability |
+| `/stats` | Compare probabilities across major cities |
+| `/howto` | How the prediction algorithm works |
+| `/contact` | Send feedback or report issues |
+| `/unsubscribe` | Stop receiving notifications |
+
+---
+
+## How the Algorithm Works
+
+1. **Ellipse fitting** - When an early warning arrives, the bot fits a Gaussian ellipse to the coordinates of all warned cities
+2. **Mahalanobis distance** - Computes how far your city is from the ellipse center, accounting for the shape and orientation of the warning zone
+3. **Random Forest prediction** - A machine learning model combines your distance with 11 other features (city history, polygon size, time of day, etc.) to predict the probability of an alarm
+
+The model is trained on all historical events since March 15, 2026 and refreshes automatically every 6 hours.
+
+---
 
 ## Tech Stack
 
-- **Python 3.12+**
-- **python-telegram-bot** — Telegram Bot API
-- **scikit-learn** — Random Forest classifier
-- **NumPy** — Ellipse fitting and Mahalanobis distance
-- **aiohttp** — Async HTTP client for RedAlert API
-- **python-socketio** — WebSocket for real-time alerts
-- **SQLite** — User subscription persistence
-- **Oracle Cloud** — Free tier VM hosting
+- **Python** - Core language
+- **scikit-learn** - Random Forest classifier
+- **NumPy** - Ellipse fitting and Mahalanobis distance computation
+- **python-telegram-bot** - Telegram Bot API
+- **python-socketio** - Real-time WebSocket alerts
+- **aiohttp** - Async HTTP client
+- **SQLite** - User subscription persistence
+- **Oracle Cloud** - Free tier VM hosting
 
 ## Data Source
 
-All alert data is sourced from the [RedAlert API](https://redalert.orielhaim.com), which provides real-time and historical data from the IDF Home Front Command.
+Alert data is sourced from the [RedAlert API](https://redalert.orielhaim.com), which provides real-time and historical data from the IDF Home Front Command.
 
-## Disclaimer
+---
 
-This bot provides **statistical estimates only** and is not a substitute for official Home Front Command instructions. **Always enter a protected space when an alarm sounds**, regardless of the bot's prediction.
+## Project Structure
+
+```
+oref-predictor-bot/
+├── main.py                      # Entry point
+├── src/
+│   ├── config.py                # Settings and constants
+│   ├── bot.py                   # Telegram bot handlers
+│   ├── predictor.py             # ML prediction engine
+│   ├── ellipse.py               # Gaussian ellipse fitting
+│   ├── city_api.py              # RedAlert cities API client
+│   ├── alert_streamer.py        # WebSocket real-time connection
+│   ├── subscription_store.py    # SQLite persistence
+│   └── data_scraper.py          # Historical data pipeline
+└── tools/
+    ├── check_city.py            # City statistics tool
+    └── debug_city.py            # Event timeline debugger
+```
+
+---
 
 ## Author
 
 © Yuval Lichtman 2026
+
+📧 yuval.lichtman@gmail.com
