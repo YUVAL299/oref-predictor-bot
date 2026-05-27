@@ -12,7 +12,7 @@ load_dotenv()
 REDALERT_API_KEY = os.environ.get("REDALERT_API_KEY", "")
 REDALERT_BASE_URL = "https://api.siren.co.il"
 REDALERT_HISTORY_URL = f"{REDALERT_BASE_URL}/api/stats/history"
-REDALERT_CITIES_URL = f"{REDALERT_BASE_URL}/api/stats/cities"
+REDALERT_CITIES_URL = f"{REDALERT_BASE_URL}/stats/cities"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 # Data
